@@ -38,6 +38,38 @@ df_10_ar = df_10.to_numpy()
 
 print(df_1_ar)
 
+#%% How to extrapolate/graph ic vs heater current
+df_1_ic = df_1[(df_1['v2h'] > v_min) & (df_1['v2h'] < v_max)]
+df_2_ic = df_2[(df_2['v2h'] > v_min) & (df_2['v2h'] < v_max)]
+df_3_ic = df_3[(df_3['v2h'] > v_min) & (df_3['v2h'] < v_max)]
+df_4_ic = df_4[(df_4['v2h'] > v_min) & (df_4['v2h'] < v_max)]
+df_5_ic = df_5[(df_5['v2h'] > v_min) & (df_5['v2h'] < v_max)]
+df_6_ic = df_6[(df_6['v2h'] > v_min) & (df_6['v2h'] < v_max)]
+df_7_ic = df_7[(df_7['v2h'] > v_min) & (df_7['v2h'] < v_max)]
+df_8_ic = df_8[(df_8['v2h'] > v_min) & (df_8['v2h'] < v_max)]
+df_9_ic = df_9[(df_9['v2h'] > v_min) & (df_9['v2h'] < v_max)]
+df_10_ic = df_10[(df_10['v2h'] > v_min) & (df_10['v2h'] < v_max)]
+
+
+df_list = [df_1_ic, df_2_ic, df_3_ic, df_4_ic, df_5_ic, df_6_ic,
+           df_7_ic, df_8_ic, df_9_ic, df_10_ic]
+max_index = []
+i_c = []
+i_hmax = []
+
+for i,df in enumerate(df_list):
+    max_index.append(df_list[i]['i_b'].idxmax())
+
+for i,df in enumerate(df_list):
+    
+    i_c.append(df_list[i].at[max_index[i], 'i_b'])
+    i_hmax.append(df_list[i].at[max_index[i], 'i_h'])
+
+plt.scatter(i_hmax, i_c)
+plt.ylabel('Ic (A)')
+plt.xlabel('I-heater (A)')
+plt.title('Ic vs heater current')
+
 #%%
 plt.plot(df_1_ar[:,5], df_1_ar[:,6], label = 'ih = -4.27e-8A')
 plt.plot(df_2_ar[:,5], df_2_ar[:,6], label = 'ih = 6.07e-6A')
