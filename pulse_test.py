@@ -404,3 +404,19 @@ plot(t*1e9, v)
 plot(t_background*1e9, v_background)
 
 print(max(v-v_background))
+#%%
+# Setup heater-pulse AWG
+num_samples_delay = 511
+num_samples_write = 1
+marker_data =  [0] + [1]*num_samples_write + [0]*(num_samples_delay-1)
+voltage_data = [-1] + [1]*num_samples_write + [-1]*(num_samples_delay-1)
+marker_data = marker_data*num_pulses_per_period
+voltage_data = voltage_data*num_pulses_per_period
+awgw.create_waveform(voltages = voltage_data, filename = 'temp.wfm', clock = None, marker1_data = marker_data, auto_fix_sample_length = False)
+awgw.load_file('temp.wfm')
+awgw.set_vhighlow(vlow = 0, vhigh = 1)
+awgw.set_marker_vhighlow(vlow = 0, vhigh = 1)
+#awgw.set_trigger_mode(continuous_mode=True)
+awgw.set_trigger_mode(trigger_mode=True)
+awgw.set_output(True)
+
