@@ -51,6 +51,7 @@ awgpulse.load_file('temp.wfm')
 awgpulse.set_vhighlow(vlow = 0, vhigh = 1)
 awgpulse.set_marker_vhighlow(vlow = 0, vhigh = 1)
 
+
 #awgw.set_trigger_mode(continuous_mode=True)
 awgpulse.set_trigger_mode(trigger_mode=True)
 awgpulse.set_output(True)
@@ -72,10 +73,10 @@ pulse_rate = 1/sin_bias_period*num_pulses_per_period # Number of input pulses pe
 #GOAL: MAKE FUNCTIONS TO SCAN IBIAS AND VP. 1ST MUST GET TOLERANCE RIGHT!
 
 #Parameters
-time_to_measure = 35
+time_to_measure = 1
 
 trigger_level1 = 0.5
-trigger_level2 = 0.05
+trigger_level2 = 0.500
 binwidth_ps = 1
 n_bins = 100000
 
@@ -96,14 +97,15 @@ time_in_ps = time_to_measure*1e12
 
 #%%PARAMETERS
 #Actual values
-sample = 'A20A26'
-filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') + sample + '_bias'
+sample = 'A19A17'
+filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') + sample + 'time_trigger'
 save_path = 'C:/Users/dsr1/se062/time_delay_measurements/'
 
-vpp_sin = [0.1, 0.2 ,0.3, 0.4]
-vpp_pulse = [0.2, 0.4,0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2]
+vpp_sin = [0.2,0.4]
+vpp_pulse = np.linspace(0.2,2,100)
 
-dB = 10
+dB = 20
+
 Rb = 10e3
 t_p = 1e-9
 awgpulse.set_clock(1/t_p)
@@ -184,7 +186,7 @@ def time_delay_values(vpp_sin,vpp_pulse):
             correlation = TimeTagger.Correlation(tagger, channel_1=1, channel_2=2, binwidth=binwidth_ps, n_bins=n_bins) 
             x_axis = correlation.getIndex()
             correlation.startFor(int(time_in_ps), clear=True)
-            time.sleep(time_in_ps/1e12 + 1)
+            time.sleep(time_in_ps/1e12 + 0.1)
             y_histogram = correlation.getData()
             t_median = abs(find_histogram_median(x_axis, y_histogram))
             
@@ -200,9 +202,14 @@ def time_delay_values(vpp_sin,vpp_pulse):
             data_list.append(data)
             
             print("vpp_sin = %0.2f / vpp_pulse = %0.2f / median = %s ps" % (v1, v2, t_median))
+
             
     df = pd.DataFrame(data_list)
+    plt.scatter(df['power'], df['t_median'])
+    plt.xlabel()
+    plt.ylabel()
     df.to_csv(save_path + filename + '.csv')
+    plt.savefig(save_path + filename, dpi = 300)
     
     return df
 
@@ -212,42 +219,98 @@ def time_delay_values(vpp_sin,vpp_pulse):
 #%%
 
 df = time_delay_values(vpp_sin, vpp_pulse)
-
-#%%
-db = 0
-rb = 10e3
-t_p = 50e-9
-awgpulse.set_clock(1/t_p)
-vpp_sine = [.1]
-vpp_puls = [1]
-a = time_delay_values(vpp_sine, vpp_puls) 
-        
-#%%
-
-
-
-#Actual values
-
-vpp_sin = 0.4
-vpp_pulse = 1
-dB = 20
-Rb = 10e3
-vp_actual = vpp_pulse/(10**(dB/20))
-ib_uA = round((vpp_sin/Rb)*1e6)
-
-awgsin.set_vpp(vpp_sin/2)
-awgsin.set_voffset(vpp_sin/4)
-
-awgpulse.set_vpp(vpp_pulse)
-
-
-
-#%%
-
-
-data = dict(
-        x_axis = x_axis,
-        data = y_histogram,
+#%% Runnin one value at a time without using function
+data_list = []
+v1 = 0.4
+for v2 in vpp_pulse:
+            
+    ib = (v1/Rb)*1e6  #append params to list
+    vp = v2/(10**(dB/20))
+    vp_actual = v2
+    power = ((v2/(10**(dB/20)))**2)/50
+    rb = Rb
+    db = dB
+          
+           
+    awgpulse.set_vpp(v2)    #set pulse
+           
+    time.sleep(.5)
+            #Take the data
+    correlation = TimeTagger.Correlation(tagger, channel_1=1, channel_2=2, binwidth=binwidth_ps, n_bins=n_bins) 
+    x_axis = correlation.getIndex()
+    correlation.startFor(int(time_in_ps), clear=True)
+    time.sleep(time_in_ps/1e12 + 0.1)
+    y_histogram = correlation.getData()
+    t_median = abs(find_histogram_median(x_axis, y_histogram))
+            
+    data = dict(
+        ib = ib,
+        vp = vp,
+        vp_actual = vp_actual,
+        power = power,
+        rb = rb,
+        db = db,
+        t_median = t_median,
         )
-filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S Swabian Propagation Delay Measurement')
-pickle.dump({'data':data}, open(filename + '.pickle', 'wb'))
+    data_list.append(data)
+            
+    print("vpp_sin = %0.2f / vpp_pulse = %0.2f / median = %s ps" % (v1, v2, t_median))
+
+    
+df = pd.DataFrame(data_list)
+plt.scatter(df['power'], df['t_median'])
+plt.xlabel('power (W)')
+plt.ylabel('t_delay (ps)')
+plt.title('time_delay ' + str(trigger_level2)+ 'V trigger')
+df.to_csv(save_path + filename + '.csv')
+plt.savefig(save_path + filename, dpi = 300)
+
+
+
+
+#%% Lecroy commands for screenshot/ plots
+channels = []
+labels = []
+channels.append('C2'); labels.append('Marker reference')
+channels.append('C3'); labels.append('Crosstalk response')
+#channels.append('C3'); labels.append('')
+#channels.append('C4'); labels.append('LED pulse sync clock')
+# channels.append('F1'); labels.append('SNSPD crosstalk average')
+#channels.append('F2'); labels.append('')
+#channels.append('M1'); labels.append('')
+#channels.append('M2'); labels.append('')
+#channels.append('M3'); labels.append('')
+lecroy.save_screenshot('test.png') #screenshot
+plot_channels = True
+tscale = 1e9
+tscale_label = 'Time (ns)'
+vscale = 1e3
+vscale_label = 'Voltage (mV)'
+
+#%%Graphing the timetrigger data
+
+data = pd.read_csv(r'C:/Users/dsr1/se062/time_delay_measurements/2021-06-15 12-40-33A19A17_bias.csv')
+
+data_10 = data[data['ib'] == 10]
+data_20 = data[data['ib'] == 20]
+data_30 = data[data['ib'] == 30]
+data_40 = data[data['ib'] == 40]
+
+plt.scatter(data_10['power'], data_10['t_delay-t_overbiased'], label = '10 uA')
+plt.scatter(data_20['power'], data_20['t_delay-t_overbiased'], label = '20 uA')
+plt.scatter(data_30['power'], data_30['t_delay-t_overbiased'], label = '30 uA')
+plt.scatter(data_40['power'], data_40['t_delay-t_overbiased'], label = '40 uA')
+plt.legend()
+plt.xlabel('power (W)')
+plt.ylabel('t_median (ps)')
+
+#%% Try over biasing and taking the measurement
+t_p = 1e-9
+awgpulse.set_clock(1/t_p)
+correlation = TimeTagger.Correlation(tagger, channel_1=1, channel_2=2, binwidth=binwidth_ps, n_bins=n_bins) 
+x_axis = correlation.getIndex()
+correlation.startFor(int(time_in_ps), clear=True)
+time.sleep(time_in_ps/1e12 + 1)
+y_histogram = correlation.getData()
+t_median = abs(find_histogram_median(x_axis, y_histogram))
+print(t_median)
