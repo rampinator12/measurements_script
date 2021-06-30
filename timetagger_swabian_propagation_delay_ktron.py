@@ -16,6 +16,7 @@ import numpy as np
 from scipy import stats
 import pandas as pd
 from matplotlib import pyplot as plt
+import math
 
 #Set-up instruments
 awgpulse = TektronixAWG610('GPIB0::1')
@@ -50,7 +51,7 @@ awgpulse.create_waveform(voltages = voltage_data, filename = 'temp.wfm', clock =
 awgpulse.load_file('temp.wfm')
 awgpulse.set_vhighlow(vlow = 0, vhigh = 1)
 awgpulse.set_marker_vhighlow(vlow = 0, vhigh = 1)
-
+awgpulse.set_lowpass_filter(9.9e+37, channel = 1)
 
 #awgw.set_trigger_mode(continuous_mode=True)
 awgpulse.set_trigger_mode(trigger_mode=True)
@@ -58,7 +59,7 @@ awgpulse.set_output(True)
 
 # Setup sine-bias AWG
 awgsin.set_mode(fg_mode = True)
-awgsin.set_lowpass_filter(20e6, channel = 1)
+awgsin.set_lowpass_filter(np.inf, channel = 1)
 awgsin.set_trigger_mode(continuous_mode=True)
 awgsin.set_clock(freq = 1/sin_bias_period) # Waveform is 1000 samples long, so 1000/1e5 = 10 ms period
 awgsin.set_vhighlow(vlow = 0, vhigh = 0.08/2) # Inputting to resistor, so set to 1/2 value
@@ -75,8 +76,8 @@ pulse_rate = 1/sin_bias_period*num_pulses_per_period # Number of input pulses pe
 #Parameters
 time_to_measure = 1
 
-trigger_level1 = 0.5
-trigger_level2 = 0.500
+trigger_level1 = 0.5 #marker lvl trigger
+trigger_level2 = 0.05
 binwidth_ps = 1
 n_bins = 100000
 
@@ -87,7 +88,7 @@ n_bins = 100000
 tagger.setTriggerLevel(1, trigger_level1)
 tagger.setTriggerLevel(2, trigger_level2)
 
-dead_time_ps = 2000
+dead_time_ps = 20000
 # Negative channel numbers indicated "falling" edge
 tagger.setDeadtime(1, dead_time_ps)
 tagger.setDeadtime(2, dead_time_ps)
@@ -95,16 +96,16 @@ time_in_ps = time_to_measure*1e12
 
 # https://www.swabianinstruments.com/static/documentation/TimeTagger/api/Measurements.html?highlight=getdata#correlation
 
-#%%PARAMETERS
+#PARAMETERS
 #Actual values
-sample = 'A19A17'
-filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') + sample + 'time_trigger'
+sample = 'A20A26'
+filename = sample + 'time_trigger'
 save_path = 'C:/Users/dsr1/se062/time_delay_measurements/'
 
-vpp_sin = [0.2,0.4]
-vpp_pulse = np.linspace(0.2,2,100)
+vpp_sin =  [0.1,0.2,0.3,0.4]
+vpp_pulse = np.linspace(0.2,2,50)
 
-dB = 20
+dB = 10
 
 Rb = 10e3
 t_p = 1e-9
@@ -113,32 +114,13 @@ awgpulse.set_clock(1/t_p)
 #%%FUNCTIONS
 
 #Returns stats of each run ie for each vp and Ib
-def statistics(x_axis, y_histogram): 
-    x_axis_nonzero = []
-    y_histogram_nonzero = []
-    data_tot = []
-    
-    for i in range(len(x_axis)):
-        
-        if y_histogram[i] > 0:
-            
-            x_axis_nonzero.append(x_axis[i])
-            y_histogram_nonzero.append(y_histogram[i])
-            
-        for i in range(len(x_axis_nonzero)):
-                
-            for j in range(y_histogram_nonzero[i]):
-                data_tot.append(x_axis_nonzero[i])
-        if not data_tot:
-            mean = np.nan
-            median = np.nan
-            stdv = np.nan
-        else:
-            mean = np.mean(data_tot)/1000
-            median = np.median(data_tot)/1000
-            stdv = np.std(data_tot)/1000
-    return mean, median, stdv
-
+def find_mean_std(x_axis, y_histogram): 
+    # From https://stackoverflow.com/a/57400289
+    probs = y_histogram / np.sum(y_histogram)
+    mids = x_axis
+    mean = np.sum(probs * mids)  
+    sd = np.sqrt(np.sum(probs * (mids - mean)**2))
+    return sd
 
 def find_histogram_median(x_axis, y_histogram):
     if np.sum(y_histogram)==0:
@@ -167,7 +149,7 @@ def time_delay_values(vpp_sin,vpp_pulse):
         awgsin.set_vpp(v1/2)            #set ibias 
         awgsin.set_voffset(v1/4)
         awgpulse.set_voffset(0)    #set pulse
-        
+        data_graph = []
         
         for v2 in vpp_pulse:
             
@@ -189,6 +171,7 @@ def time_delay_values(vpp_sin,vpp_pulse):
             time.sleep(time_in_ps/1e12 + 0.1)
             y_histogram = correlation.getData()
             t_median = abs(find_histogram_median(x_axis, y_histogram))
+            t_std = abs(find_mean_std(x_axis, y_histogram))
             
             data = dict(
                 ib = ib,
@@ -198,18 +181,21 @@ def time_delay_values(vpp_sin,vpp_pulse):
                 rb = rb,
                 db = db,
                 t_median = t_median,
+                t_std = t_std
                 )
             data_list.append(data)
             
             print("vpp_sin = %0.2f / vpp_pulse = %0.2f / median = %s ps" % (v1, v2, t_median))
 
-            
+           
     df = pd.DataFrame(data_list)
-    plt.scatter(df['power'], df['t_median'])
-    plt.xlabel()
-    plt.ylabel()
-    df.to_csv(save_path + filename + '.csv')
-    plt.savefig(save_path + filename, dpi = 300)
+    plt.scatter(df['power'], df['t_median'], label = '%0.1f uA'%ib)
+    plt.xlabel('power (W)')
+    plt.ylabel('t_delay (ps)')
+    plt.legend()
+    plt.title('t_delay')
+    df.to_csv( save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') + filename + '.csv')
+    plt.savefig( save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') +filename, dpi = 300)
     
     return df
 
@@ -219,22 +205,37 @@ def time_delay_values(vpp_sin,vpp_pulse):
 #%%
 
 df = time_delay_values(vpp_sin, vpp_pulse)
+#%%Try negative bias
+v = 1
+awgsin.set_vpp(v/2)
+awgsin.set_voffset(-v/4)
 #%% Runnin one value at a time without using function
 data_list = []
-v1 = 0.4
+v1 = 0.2
+awgsin.set_vpp(v1/2)
+awgsin.set_voffset(-v1/4)
+awgpulse.set_voffset(0)     
+tagger.setTriggerLevel(2,0.05)
+
+
+
 for v2 in vpp_pulse:
             
-    ib = (v1/Rb)*1e6  #append params to list
-    vp = v2/(10**(dB/20))
-    vp_actual = v2
-    power = ((v2/(10**(dB/20)))**2)/50
+    ib = (v1/Rb)  #append params to list
+    v_half = v2/2
+    vp = v_half/(10**(dB/20))
+    vp_actual = v_half
+    power = ((v_half/(10**(dB/20)))**2)/50
     rb = Rb
     db = dB
           
+    
+    v_trig = vp/4
+    # v_trig = 0.05
+    tagger.setTriggerLevel(1,v_trig )
            
     awgpulse.set_vpp(v2)    #set pulse
-           
-    time.sleep(.5)
+    time.sleep(.1)
             #Take the data
     correlation = TimeTagger.Correlation(tagger, channel_1=1, channel_2=2, binwidth=binwidth_ps, n_bins=n_bins) 
     x_axis = correlation.getIndex()
@@ -242,6 +243,7 @@ for v2 in vpp_pulse:
     time.sleep(time_in_ps/1e12 + 0.1)
     y_histogram = correlation.getData()
     t_median = abs(find_histogram_median(x_axis, y_histogram))
+    t_std = abs(find_mean_std(x_axis, y_histogram) )
             
     data = dict(
         ib = ib,
@@ -251,21 +253,85 @@ for v2 in vpp_pulse:
         rb = rb,
         db = db,
         t_median = t_median,
+        v_trig = v_trig,
+        t_std = t_std,
         )
     data_list.append(data)
             
     print("vpp_sin = %0.2f / vpp_pulse = %0.2f / median = %s ps" % (v1, v2, t_median))
 
-    
+
 df = pd.DataFrame(data_list)
+
+#df = pd.read_csv(r"C:\Users\dsr1\se062\time_delay_measurements\2021-06-30 14-05-14A20A26time_trigger.csv")
 plt.scatter(df['power'], df['t_median'])
 plt.xlabel('power (W)')
 plt.ylabel('t_delay (ps)')
-plt.title('time_delay ' + str(trigger_level2)+ 'V trigger')
-df.to_csv(save_path + filename + '.csv')
-plt.savefig(save_path + filename, dpi = 300)
+plt.title('time_delay ' + str(trigger_level2)+ 'V trigger' + ' -20 uA')
+df.to_csv( save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') +filename + '.csv')
+plt.savefig(save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') +filename, dpi = 300)
 
 
+#%%Scan of heater marker to heater pulse measurements for rrange of trigger lvls
+
+data_list = []
+trigger_lvl = np.linspace(.05,.5,50)
+v1 = 2
+awgsin.set_vpp(v1/2)
+awgsin.set_voffset(v1/4)
+vpp_pulse = np.linspace(0.2,2,20)
+
+for v in trigger_lvl:
+    
+    tagger.setTriggerLevel(2, v)
+    tagger.setTriggerLevel(1,v)
+    
+    for v2 in vpp_pulse:
+                
+        #ib = (v1/Rb)*1e6  #append params to list
+        v_half = v2/2
+        vp = v_half/(10**(dB/20))
+        vp_actual = v_half
+        power = ((v_half/(10**(dB/20)))**2)/50
+        rb = Rb
+        db = dB
+          
+           
+        awgpulse.set_vpp(v2)    #set pulse
+               
+        time.sleep(.1)
+                #Take the data
+        correlation = TimeTagger.Correlation(tagger, channel_1=1, channel_2=2, binwidth=binwidth_ps, n_bins=n_bins) 
+        x_axis = correlation.getIndex()
+        correlation.startFor(int(time_in_ps), clear=True)
+        time.sleep(time_in_ps/1e12 + 0.1)
+        y_histogram = correlation.getData()
+        t_median = abs(find_histogram_median(x_axis, y_histogram))
+        #t_std = abs(find_mean_std(x_axis, y_histogram) )
+            
+        data = dict(
+            #ib = ib,
+            vp = vp,
+            vp_actual = vp_actual,
+            power = power,
+            #rb = rb,
+            db = db,
+            t_median = t_median,
+            #t_std = t_std
+            v_trigger = v
+            )
+        data_list.append(data)
+            
+        print("v_trig = %0.2f / vpp_pulse = %0.2f / median = %s ps" % (v, v2, t_median))
+
+df = pd.DataFrame(data_list)
+plt.scatter(df['power'], df['t_median'], c = df['v_trigger'], rasterized = True, vmin = 0, vmax = 0.5 )
+plt.colorbar()
+plt.xlabel('power (W)')
+plt.ylabel('t_delay (ps)')
+plt.title('Heater delay per vpulse and trigger lvl')
+df.to_csv( save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') +filename + '.csv')
+plt.savefig(save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') +filename, dpi = 300)
 
 
 #%% Lecroy commands for screenshot/ plots
@@ -273,40 +339,65 @@ channels = []
 labels = []
 channels.append('C2'); labels.append('Marker reference')
 channels.append('C3'); labels.append('Crosstalk response')
-#channels.append('C3'); labels.append('')
+#channels.append('P3'); labels.append('t_delay')
 #channels.append('C4'); labels.append('LED pulse sync clock')
-# channels.append('F1'); labels.append('SNSPD crosstalk average')
+#channels.append('F3'); labels.append('t_delay')
 #channels.append('F2'); labels.append('')
 #channels.append('M1'); labels.append('')
 #channels.append('M2'); labels.append('')
 #channels.append('M3'); labels.append('')
-lecroy.save_screenshot('test.png') #screenshot
+lecroy.save_screenshot(datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') + 'test.png') #screenshot
 plot_channels = True
 tscale = 1e9
 tscale_label = 'Time (ns)'
 vscale = 1e3
 vscale_label = 'Voltage (mV)'
 
+data = {}
+if plot_channels is True:
+    fig = plt.figure()
+for n,ch in enumerate(channels):
+    t,v = lecroy.get_wf_data(channel = ch)
+    data[ch + '_t'] = t
+    data[ch + '_v'] = v
+    if plot_channels is True:
+        
+        plt.plot(t*tscale, v*1e3, label = ch + '-' + labels[n])
+        plt.ylabel(vscale_label)
+        plt.xlabel(tscale_label)
+        plt.legend()
+
 #%%Graphing the timetrigger data
 
-data = pd.read_csv(r'C:/Users/dsr1/se062/time_delay_measurements/2021-06-15 12-40-33A19A17_bias.csv')
+data = pd.read_csv(r"C:\Users\dsr1\se062\time_delay_measurements\2021-06-16 14-51-24A20A26time_trigger.csv")
 
 data_10 = data[data['ib'] == 10]
 data_20 = data[data['ib'] == 20]
 data_30 = data[data['ib'] == 30]
 data_40 = data[data['ib'] == 40]
 
-plt.scatter(data_10['power'], data_10['t_delay-t_overbiased'], label = '10 uA')
-plt.scatter(data_20['power'], data_20['t_delay-t_overbiased'], label = '20 uA')
-plt.scatter(data_30['power'], data_30['t_delay-t_overbiased'], label = '30 uA')
-plt.scatter(data_40['power'], data_40['t_delay-t_overbiased'], label = '40 uA')
+data_10['t_delay'] = data_10['t_median'] - 36610
+data_20['t_delay'] = data_20['t_median'] - 36610
+data_30['t_delay'] = data_30['t_median'] - 36610
+data_40['t_delay'] = data_40['t_median'] - 36610
+plt.scatter(data_10['power'], data_10['t_delay'], label = '10 uA')
+plt.scatter(data_20['power'], data_20['t_delay'], label = '20 uA')
+plt.scatter(data_30['power'], data_30['t_delay'], label = '30 uA')
+plt.scatter(data_40['power'], data_40['t_delay'], label = '40 uA')
 plt.legend()
 plt.xlabel('power (W)')
-plt.ylabel('t_median (ps)')
+plt.ylabel('t_delay (ps)')
+plt.title('A11A25 time_delay' )
+plt.savefig(save_path + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S') + filename, dpi = 300)
 
-#%% Try over biasing and taking the measurement
+#%% Experimental runs to check oscilloscope
+awgsin.set_vpp(.1/2)
+awgsin.set_voffset(.1/4)
+awgpulse.set_vpp(0.1)
 t_p = 1e-9
 awgpulse.set_clock(1/t_p)
+#%%
+time.sleep(1)
 correlation = TimeTagger.Correlation(tagger, channel_1=1, channel_2=2, binwidth=binwidth_ps, n_bins=n_bins) 
 x_axis = correlation.getIndex()
 correlation.startFor(int(time_in_ps), clear=True)
