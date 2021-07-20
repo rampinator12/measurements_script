@@ -1,4 +1,4 @@
-#%%
+  #%%
 from amcc.instruments.rigol_dg5000 import RigolDG5000
 from amcc.instruments.lecroy_620zi import LeCroy620Zi
 from amcc.instruments.switchino import Switchino
@@ -107,7 +107,7 @@ def pulse_response_2d_awg(
     awgsin.set_voffset(vbias/4)
     
     #Set up counter
-    counter.set_trigger(counter_trigger_voltage = 0.05, slope_positive = True, channel = 1)
+    counter.set_trigger(counter_trigger_voltage , slope_positive = True, channel = 1)
     
     #Pause to make sure all settings are entered
     time.sleep(100e-3)
@@ -116,8 +116,8 @@ def pulse_response_2d_awg(
     counts = counter.timed_count(count_time)
     
     #Reset instruments
-    reset_2x_awg_pulse_ktron_experiment(pulse_rate = 100,)
-    time.sleep(100e-3)
+    #reset_2x_awg_pulse_ktron_experiment(pulse_rate = 100,)
+    #time.sleep(100e-3)
     #record data
     data = dict(
         vbias = vbias,
@@ -180,12 +180,12 @@ def energy_min_per_ibias_values(
         att_db = 20,
         vbias = np.linspace(0.1,0.5,10),
         vp = np.geomspace(0.1, 2,50),
-        counter_trigger_level = 0.05,
+        counter_trigger_voltage = 0.05,
         **kwargs):
     reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
     time.sleep(0.1)
     #Setup counter:
-    counter.set_trigger(counter_trigger_voltage = 0.05, slope_positive = True, channel = 1)
+    counter.set_trigger(counter_trigger_voltage , slope_positive = True, channel = 1)
     #Main data storage
     data_main = []
     data_graph = []
@@ -225,7 +225,7 @@ def energy_min_per_ibias_values(
                 counts = counts,
                 vp = vp,
                 vp_into_cryostat = vp_into_cryostat, 
-                counter_trigger_level = counter_trigger_level,
+                counter_trigger_voltage = counter_trigger_voltage,
                 **kwargs)
             data_main.append(data)
             
@@ -272,13 +272,13 @@ lecroy = LeCroy620Zi("TCPIP::%s::INSTR" % '192.168.1.100')
 reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
 time.sleep(1e-3)
 
-testname = 'change this to sample name'
+testname = 'code_test_A20A26'
 #parameter combos lowest variable changes the fastest
 parameter_dict = dict(
-        tp = 2e-9, #pulse width
-        vbias = [0.1,0.2,0.3,0.4],
+        tp = np.geomspace(1e-9,1e-7,50), #pulse width
+        vbias = [0.1], #Can only do one ibias at a time
         rbias = 10e3,
-        vp = np.geomspace(0.1,2,100), #pulse height
+        vp = np.geomspace(0.1,2,50), #pulse height
         att_db = 20,
         count_time = 0.1, #counter time
         counter_trigger_voltage = 0.05,
@@ -323,4 +323,3 @@ filename_graph = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testna
 
 #Make/ save the plot
 energy_min_per_ibias_plot(data_graph)
-
