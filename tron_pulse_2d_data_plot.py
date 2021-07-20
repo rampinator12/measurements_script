@@ -1,4 +1,4 @@
-  #%%
+#%%
 from amcc.instruments.rigol_dg5000 import RigolDG5000
 from amcc.instruments.lecroy_620zi import LeCroy620Zi
 from amcc.instruments.switchino import Switchino
@@ -189,14 +189,14 @@ def energy_min_per_ibias_values(
     #Main data storage
     data_main = []
     data_graph = []
-    for i in range(len(vbias)):
+    for vb in tqdm(vbias):
         
         #Compute necessary parameters
-        ibias = vbias/rbias
+        ibias = vb/rbias
         
         #Set up AWG-sine
-        awgsin.set_vpp(vbias/2)
-        awgsin.set_voffset(vbias/4)
+        awgsin.set_vpp(vb/2)
+        awgsin.set_voffset(vb/4)
         time.sleep(50e-3)
         
         #list needed for min value when counts occurr
@@ -206,24 +206,24 @@ def energy_min_per_ibias_values(
         for v in vp:
             #Set up AWG-pulse
             awgpulse.set_clock(1/tp)
-            awgpulse.set_vpp(abs(vp))
-            awgpulse.set_voffset(vp/2)
+            awgpulse.set_vpp(abs(v))
+            awgpulse.set_voffset(v/2)
             time.sleep(50e-3)
             
-            vp_into_cryostat = vp*10**(-att_db/20)
+            vp_into_cryostat = v*10**(-att_db/20)
             counts = counter.timed_count(count_time)
             counts_per_ib.append(counts)
-            vp_per_ib.append(vp_into_cryostat())
+            vp_per_ib.append(vp_into_cryostat)
             
             
             data = dict(
                 tp = tp,
                 rbias = rbias,
-                vbias = vbias,
+                vbias = vb,
                 ibias = ibias,
                 att_db = att_db,
                 counts = counts,
-                vp = vp,
+                vp = v,
                 vp_into_cryostat = vp_into_cryostat, 
                 counter_trigger_voltage = counter_trigger_voltage,
                 **kwargs)
@@ -243,11 +243,8 @@ def energy_min_per_ibias_values(
 def energy_min_per_ibias_plot(data_graph):
     #list of values we will be plotting
     data_graph['ibias'] = data_graph['ibias']*1e6
-    ibias_list = data_graph['ibias'].to_numpy()
-    ibias_list = ibias_list*1e6
-    energy_min_list = data_graph['energy_min'].to_numpy()
     
-    plt.plot(ibias_list, energy_min_list, marker = '.')
+    plt.plot(data_graph['ibias'], data_graph['energy_min'], marker = '.')
     plt.yscale('log')
     plt.xlabel('ibias (uA)')
     plt.ylabel('energy (J)')
@@ -316,10 +313,12 @@ data_main, data_graph = energy_min_per_ibias_values(
 
 dfmain = pd.DataFrame(data_main)
 dfgraph = pd.DataFrame(data_graph)
+
 #save the data
 filename_main = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy_main'
-dfmain.to_csv() 
+dfmain.to_csv(filename_main + '.csv') 
 filename_graph = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy_graph'
+dfgraph.to_csv(filename_graph + '.csv')
 
 #Make/ save the plot
-energy_min_per_ibias_plot(data_graph)
+energy_min_per_ibias_plot(dfgraph)
