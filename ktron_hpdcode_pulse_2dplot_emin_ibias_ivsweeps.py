@@ -6,6 +6,8 @@ from amcc.instruments.tektronix_awg610 import TektronixAWG610
 from amcc.instruments.srs_sim970 import SIM970
 from amcc.instruments.srs_sim928 import SIM928
 from amcc.instruments.agilent_53131a import Agilent53131a
+import TimeTagger
+from TimeTagger import createTimeTagger
 
 from amcc.standard_measurements.ic_sweep import setup_ic_measurement_lecroy, run_ic_sweeps, calc_ramp_rate
 from tqdm import tqdm # Requires "colorama" package also on Windows to display properly
@@ -33,6 +35,29 @@ def parameter_combinations(parameters_dict):
     value_combinations = list(itertools.product(*parameters_dict.values()))
     keys = list(parameters_dict.keys())
     return [{keys[n]:values[n] for n in range(len(keys))} for values in value_combinations]
+
+#Returns stats of each run ie for each vp and Ib
+def find_mean_std(x_axis, y_histogram): 
+    # From https://stackoverflow.com/a/57400289
+    probs = y_histogram / np.sum(y_histogram)
+    mids = x_axis
+    mean = np.sum(probs * mids)  
+    sd = np.sqrt(np.sum(probs * (mids - mean)**2))
+    return sd
+
+def find_nearest(array, value):
+    array = np.asarray(array)
+    idx = (np.abs(array - value)).argmin()
+    return idx, array[idx]
+    
+def find_histogram_median(x_axis, y_histogram):
+    if np.sum(y_histogram)==0:
+        return np.nan
+    
+    ch = np.cumsum(y_histogram)
+    idx, val = find_nearest(ch, np.max(ch)/2)
+    return x_axis[idx]
+
 
 #reset awgsin/ awgpulse, should do this between runs, could include at end of measurement functions
 def reset_2x_awg_pulse_ktron_experiment(
@@ -79,6 +104,7 @@ def reset_2x_awg_pulse_ktron_experiment(
     awgsin.set_clock(freq = 1/sin_bias_period) # Waveform is 1000 samples long, so 1000/1e5 = 10 ms period
     awgsin.set_vhighlow(vlow = 0, vhigh = 0.1) # Inputting to resistor, so set to 1/2 value
     awgsin.set_output(True, channel = 1)
+    time.sleep(0.1)
 
 #2d-map measurement/ values
 def pulse_response_2d_awg(
@@ -137,8 +163,43 @@ def pulse_response_2d_awg(
     
     return data
 
+
+def plot_1d_energy_vs_bias(df, threshold = 0.5, ylim = None):
+    df3 = df
+    rbias = df3['rbias'].unique()[0]
+    imin, imax = df3.vbias.min()/rbias, df3.vbias.max()/rbias
+    fig, ax = plt.subplots()
+    plt.xlim([imin*1e6,imax*1e6])
+#    ax.set_xscale('log')
+    ax.set_yscale('log')
+    for t, df2 in df3.groupby('tp'):
+        x = []
+        y = []
+        for vbias, df in df2.groupby('vbias'):
+            energy_in = np.array(df.energy)
+            output = np.array(df.counts/df.counts_expected)
+            ibias = vbias/rbias
+            threshold_idx = np.argmax(output > threshold)
+            # Check if it ever actually clicked, or if it always latched
+            if sum(output > threshold) == 0: required_energy = np.nan
+            elif sum(output > threshold) == len(output): required_energy = np.nan
+            else: required_energy = energy_in[threshold_idx]
+            y.append(required_energy)
+            x.append(ibias)
+        plt.plot(np.array(x)*1e6,y,'.:', label = ('t = %0.1f ns' % (t*1e9)))
+    plt.xlabel('Ibias (uA)')
+    if ylim is not None:
+        plt.ylim(ylim)
+    plt.ylabel('Minimum energy input required (J)')
+    plt.title('Pulse input response')
+    plt.legend()
+    filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-')
+#        pickle.dump(fig, open(filename + '.fig.pickle', 'wb'))
+    plt.savefig(filename + '.png')
+
+
 #plots 2d pulse data
-def pulse_response_2d_plot(data, max_count = 4):
+def plot_pulse_response_2d(data, max_count = 4):
     #plot 2D (Pulse voltage) vs (Pulse length), color of pixels = count#
     df = data
     for vbias, df1 in df.groupby('vbias'):
@@ -156,7 +217,95 @@ def pulse_response_2d_plot(data, max_count = 4):
         filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ (' %0.1f uA' % (ibias*1e6))
         plt.savefig(filename + '.png', dpi = 300)
         
-#min energy per ibias to get a click plot/ data
+
+def experiment_propagation_delay_timetagger(
+    tp,
+    vbias,
+    rbias,
+    vp,
+    att_db,
+    count_time,
+    pulse_rate,
+    vp_splitter,
+    tagger_ch1_trigger,
+    tagger_ch2_trigger,
+    tagger_dead_time,
+    tagger_binwidth_ps,
+    tagger_n_bins,
+    **kwargs,
+    ):
+
+
+    # Compute necessary parameters
+    ibias = vbias/rbias
+    vp_into_cryostat = vp*10**(-att_db/20)
+    if vp_splitter is True:
+        vp_into_cryostat = vp_into_cryostat/2
+    power = (vp_into_cryostat**2)/50
+    energy = power*tp
+    
+    # Setup pulse-AWG parameters
+    awgpulse.set_clock(1/tp)
+    awgpulse.set_vpp(abs(vp))
+    awgpulse.set_voffset(vp/2)
+
+    # Setup sine-wave-bias-AWG parameters
+    awgsin.set_vpp(abs(vbias/2))
+    awgsin.set_voffset(vbias/4)
+
+
+    # Setup time tagger
+    tagger_ch1 = 1
+    tagger_ch2 = 2
+    tagger.setTriggerLevel(tagger_ch1, tagger_ch1_trigger)
+    tagger.setTriggerLevel(tagger_ch2, tagger_ch2_trigger)
+    tagger.setDeadtime(tagger_ch1, tagger_dead_time)
+    tagger.setDeadtime(tagger_ch2, tagger_dead_time)
+    correlation = TimeTagger.Correlation(tagger, channel_1=tagger_ch1, channel_2=tagger_ch2,
+                                    binwidth=tagger_binwidth_ps, n_bins=tagger_n_bins) 
+    
+    # Pause briefly to make sure all settings are entered
+    time.sleep(100e-3)
+
+    # Take the data
+    correlation.startFor(int(count_time*1e12), clear=True)
+    time.sleep(count_time + 0.05)
+    y_histogram = correlation.getData()
+    x_axis = correlation.getIndex()
+    t_median = abs(find_histogram_median(x_axis, y_histogram))
+    t_std = abs(find_mean_std(x_axis, y_histogram))
+    counts = sum(y_histogram)
+    
+    # Store the data in a dictionary
+    data = dict(
+        vbias = vbias,
+        rbias = rbias,
+        ibias = ibias,
+        vp = vp,
+        att_db = att_db,
+        vp_into_cryostat = vp_into_cryostat,
+        power = power,
+        energy = energy,
+        tp = tp,
+        count_time = count_time,
+        counts = counts,
+        t_median = t_median*1e-12,
+        t_std = t_std*1e-12,
+        pulse_rate = pulse_rate,
+        counts_expected = pulse_rate*count_time,
+        vp_splitter = vp_splitter,
+        tagger_ch1_trigger = tagger_ch1_trigger,
+        tagger_ch2_trigger = tagger_ch2_trigger,
+        tagger_dead_time = tagger_dead_time,
+        tagger_binwidth_ps = tagger_binwidth_ps,
+        tagger_n_bins = tagger_n_bins,
+        tagger_ch1 = tagger_ch1,
+        tagger_ch2 = tagger_ch2,
+        **kwargs,
+        )
+    
+    return data
+
 
 #make a function that finds where counts > 0
 def find_v_min(vp_list, counts):    #returns min v_p value where we get a count > 0 at least twice in a row
@@ -173,85 +322,6 @@ def find_v_min(vp_list, counts):    #returns min v_p value where we get a count 
         v_min = min(v_count)
     return v_min 
 
-#Gets all values plus values needed for graph
-def energy_min_per_ibias_values(
-        tp = 2e-9,
-        count_time = 0.1,
-        rbias = 10e3,
-        att_db = 20,
-        vbias = np.linspace(0.1,0.5,10),
-        vp = np.geomspace(0.1, 2,50),
-        counter_trigger_voltage = 0.05,
-        **kwargs):
-    reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
-    time.sleep(0.1)
-    #Setup counter:
-    counter.set_trigger(counter_trigger_voltage , slope_positive = True, channel = 1)
-    #Main data storage
-    data_main = []
-    data_graph = []
-    for vb in tqdm(vbias):
-        
-        #Compute necessary parameters
-        ibias = vb/rbias
-        
-        #Set up AWG-sine
-        awgsin.set_vpp(vb/2)
-        awgsin.set_voffset(vb/4)
-        time.sleep(50e-3)
-        
-        #list needed for min value when counts occurr
-        counts_per_ib = []
-        vp_per_ib = []
-        
-        for v in vp:
-            #Set up AWG-pulse
-            awgpulse.set_clock(1/tp)
-            awgpulse.set_vpp(abs(v))
-            awgpulse.set_voffset(v/2)
-            time.sleep(50e-3)
-            
-            vp_into_cryostat = v*10**(-att_db/20)
-            counts = counter.timed_count(count_time)
-            counts_per_ib.append(counts)
-            vp_per_ib.append(vp_into_cryostat)
-            
-            
-            data = dict(
-                tp = tp,
-                rbias = rbias,
-                vbias = vb,
-                ibias = ibias,
-                att_db = att_db,
-                counts = counts,
-                vp = v,
-                vp_into_cryostat = vp_into_cryostat, 
-                counter_trigger_voltage = counter_trigger_voltage,
-                **kwargs)
-            data_main.append(data)
-            
-        vp_into_cryostat_min = find_v_min(vp_per_ib, counts_per_ib)
-        energy_min = (vp_into_cryostat_min**2/50)*tp
-        
-        data_min = dict(ibias = ibias,
-                        vp_into_cryostat_min = vp_into_cryostat_min,
-                        energy_min = energy_min,
-                        **kwargs)
-        data_graph.append(data_min)
-        
-    return data_main, data_graph
-        
-def energy_min_per_ibias_plot(data_graph):
-    #list of values we will be plotting
-    data_graph['ibias'] = data_graph['ibias']*1e6
-    
-    plt.plot(data_graph['ibias'], data_graph['energy_min'], marker = '.')
-    plt.yscale('log')
-    plt.xlabel('ibias (uA)')
-    plt.ylabel('energy (J)')
-    plt.title('%s Min required energy' %(testname))
-    filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy'
-    plt.savefig(filename + '.png', dpi = 300)
 
 # I-V curves for nanowire/ heater
 def v_in_stack(volt_lim, num_pts):
@@ -427,63 +497,87 @@ awgsin = TektronixAWG610('GPIB0::23') # Sine generator
 counter = Agilent53131a('GPIB0::10::INSTR')
 lecroy = LeCroy620Zi("TCPIP::%s::INSTR" % '192.168.1.100')
 
+
+# create a timetagger instance
+tagger = createTimeTagger()
+try:
+    tagger.reset()
+except:
+    pass
+
+pulse_rate = 100
+reset_2x_awg_pulse_ktron_experiment(pulse_rate=pulse_rate)
+time.sleep(100e-3)
+
 #%%============================================================================
-# Normal pulse 2d map experiment/ plot
-#==============================================================================
-#reset instruments 1st
-reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
-time.sleep(1e-3)
+# # Normal pulse 2d map experiment/ plot
+# #==============================================================================
+# #reset instruments 1st
 
-testname = 'A17A18'
-#parameter combos lowest variable changes the fastest
-parameter_dict = dict(
-        tp = np.geomspace(4e-10,1e-7,50), #pulse width
-        vbias = [1.1], #Can only do one ibias at a time
-        rbias = 10e3,
-        vp = np.geomspace(0.1,2,50), #pulse height
-        att_db = 50,
-        count_time = 0.1, #counter time
-        counter_trigger_voltage = 0.05,
-    )
+# device = 'A17A18'
+# #parameter combos lowest variable changes the fastest
+# parameter_dict = dict(
+#         vbias = [1.1], #Can only do one ibias at a time
+#         rbias = 10e3,
+#         vp = np.geomspace(0.1,2,50), #pulse height
+#         tp = np.geomspace(4e-10,1e-7,50), #pulse width
+#         att_db = 50,
+#         count_time = 0.1, #counter time
+#         counter_trigger_voltage = 0.05,
+#         device = [device]
+#     )
 
-#Create combinations
-parameter_combos = parameter_combinations(parameter_dict)
-data_list = []
+# #Create combinations
+# parameter_combos = parameter_combinations(parameter_dict)
+# data_list = []
 
-for p_d in tqdm(parameter_combos):
-    data_list.append(pulse_response_2d_awg(**p_d))
+# for p_d in tqdm(parameter_combos):
+#     data_list.append(pulse_response_2d_awg(**p_d))
 
-#Save the data 
-filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S ktron_2d_pulse ') + testname
-df = pd.DataFrame(data_list)
-df.to_csv(filename + '.csv')
+# #Save the data 
+# filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S ktron_2d_pulse ') + device
+# df = pd.DataFrame(data_list)
+# df.to_csv(filename + '.csv')
 
-#Plot data, saving of image in function2
-pulse_response_2d_plot(df, max_count=4)
+# #Plot data, saving of image in function2
+# plot_pulse_response_2d(df, max_count=4)
+
 
 #%%============================================================================
 # Minimum required energy to get a click as fcn of ibias
 #==============================================================================
-reset_2x_awg_pulse_ktron_experiment(pulse_rate = 100)
-testname = 'change this to sample name'
-#Take the data, change the arguments for required parameters
-data_main, data_graph = energy_min_per_ibias_values(
-        tp = 2e-9,
-        count_time = 0.1,
-        rbias = 10e3,
-        att_db = 20,
-        vbias = np.linspace(0.1,0.5,10),
-        vp = np.geomspace(0.1, 2,50),
-        counter_trigger_level = 0.05,)
 
-dfmain = pd.DataFrame(data_main)
-dfgraph = pd.DataFrame(data_graph)
+device = 'A20A26'
+#parameter combos lowest variable changes the fastest
+parameter_dict = dict(
+    tp = 2e-9,
+    vbias = np.linspace(0.1,1.5,11),
+    rbias = 10e3,
+    vp = np.geomspace(0.1,2,21),
+    att_db = 30,
+    count_time = 0.1,
+    pulse_rate = pulse_rate,
+    vp_splitter = True,
+    tagger_ch1_trigger = 0.5,
+    tagger_ch2_trigger = 0.05,
+    tagger_dead_time = 20000,
+    tagger_binwidth_ps = 1,
+    tagger_n_bins = 100000,
+    device = [device],
+    )
 
-#save the data
-filename_main = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy_main'
-dfmain.to_csv(filename_main + '.csv') 
-filename_graph = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy_graph'
-dfgraph.to_csv(filename_graph + '.csv')
+# Create combinations and manipulate them as needed
+parameter_dict_list = parameter_combinations(parameter_dict)
+for p_d in parameter_dict_list:
+    p_d['tagger_ch1_trigger'] = p_d['vp']/4
 
-#Make/ save the plot
-energy_min_per_ibias_plot(dfgraph)
+data_list = []
+for p_d in tqdm(parameter_dict_list):
+    data_list.append(experiment_propagation_delay_timetagger(**p_d))
+
+#Save the data 
+filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S ktron min energy and delay') + device
+df = pd.DataFrame(data_list)
+df.to_csv(filename + '.csv')
+
+plot_1d_energy_vs_bias(df, threshold = 0.5)
