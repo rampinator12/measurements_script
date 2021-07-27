@@ -138,7 +138,7 @@ def pulse_response_2d_awg(
     return data
 
 #plots 2d pulse data
-def pulse_response_2d_plot(data, max_count = 4):
+def plot_pulse_response_2d(data, max_count = 4):
     #plot 2D (Pulse voltage) vs (Pulse length), color of pixels = count#
     df = data
     for vbias, df1 in df.groupby('vbias'):
@@ -155,6 +155,40 @@ def pulse_response_2d_plot(data, max_count = 4):
         plt.tight_layout()
         filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ (' %0.1f uA' % (ibias*1e6))
         plt.savefig(filename + '.png', dpi = 300)
+
+
+
+def plot_1d_energy_vs_bias(df, threshold = 0.5, ylim = [0.5e-18, 1e-15]):
+    df3 = df
+    rbias = df3['rbias'].unique()[0]
+    imin, imax = df3.vbias.min()/rbias, df3.vbias.max()/rbias
+    fig, ax = plt.subplots()
+    plt.xlim([imin*1e6,imax*1e6])
+#    ax.set_xscale('log')
+    ax.set_yscale('log')
+    for t, df2 in df3.groupby('tp'):
+        x = []
+        y = []
+        for vbias, df in df2.groupby('vbias'):
+            energy_in = np.array(df.energy)
+            output = np.array(df.counts)
+            ibias = vbias/rbias
+            threshold_idx = np.argmax(output > threshold)
+            # Check if it ever actually clicked, or if it always latched
+            if sum(output > threshold) == 0: required_energy = np.nan
+            elif sum(output > threshold) == len(output): required_energy = np.nan
+            else: required_energy = energy_in[threshold_idx]
+            y.append(required_energy)
+            x.append(ibias)
+        plt.plot(np.array(x)*1e6,y,'.:', label = ('t = %0.1f ns' % (t*1e9)))
+    plt.xlabel('Ibias (uA)')
+    # plt.ylim(ylim)
+    plt.ylabel('Minimum energy input required (J)')
+    plt.title('Pulse input response')
+    plt.legend()
+    filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-')
+#        pickle.dump(fig, open(filename + '.fig.pickle', 'wb'))
+    plt.savefig(filename + '.png')
         
 #min energy per ibias to get a click plot/ data
 
@@ -182,10 +216,10 @@ def energy_min_per_ibias_values(
         vp = np.geomspace(0.1, 2,50),
         counter_trigger_voltage = 0.05,
         **kwargs):
-    reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
-    time.sleep(0.1)
+        
     #Setup counter:
     counter.set_trigger(counter_trigger_voltage , slope_positive = True, channel = 1)
+    time.sleep(0.1)
     #Main data storage
     data_main = []
     data_graph = []
@@ -262,20 +296,20 @@ awgsin = TektronixAWG610('GPIB0::23') # Sine generator
 counter = Agilent53131a('GPIB0::10::INSTR')
 lecroy = LeCroy620Zi("TCPIP::%s::INSTR" % '192.168.1.100')
 
+reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
+time.sleep(0.1)
 #%%============================================================================
 # Normal pulse 2d map experiment/ plot
 #==============================================================================
 #reset instruments 1st
-reset_2x_awg_pulse_ktron_experiment(pulse_rate=100)
-time.sleep(1e-3)
 
 testname = 'code_test_A20A26'
 #parameter combos lowest variable changes the fastest
 parameter_dict = dict(
-        tp = np.geomspace(1e-9,1e-7,50), #pulse width
         vbias = [0.1], #Can only do one ibias at a time
         rbias = 10e3,
-        vp = np.geomspace(0.1,2,50), #pulse height
+        vp = np.geomspace(0.1,2,41), #pulse height
+        tp = np.geomspace(1e-9,1e-7,41), #pulse width
         att_db = 20,
         count_time = 0.1, #counter time
         counter_trigger_voltage = 0.05,
@@ -294,31 +328,41 @@ df = pd.DataFrame(data_list)
 df.to_csv(filename + '.csv')
 
 #Plot data, saving of image in function
-pulse_response_2d_plot(df, max_count=4)
+plot_pulse_response_2d(df, max_count=4)
 
 #%%============================================================================
 # Minimum required energy to get a click as fcn of ibias
 #==============================================================================
-reset_2x_awg_pulse_ktron_experiment(pulse_rate = 100)
-testname = 'change this to sample name'
-#Take the data, change the arguments for required parameters
-data_main, data_graph = energy_min_per_ibias_values(
-        tp = 2e-9,
-        count_time = 0.1,
+
+device = 'A20A26'
+#parameter combos lowest variable changes the fastest
+parameter_dict = dict(
+        vbias = np.linspace(0.1,1.5,41), #Can only do one ibias at a time
         rbias = 10e3,
+        vp = np.geomspace(0.1,2,51), #pulse height
+        tp = 2e-9, #pulse width
         att_db = 20,
-        vbias = np.linspace(0.1,0.5,10),
-        vp = np.geomspace(0.1, 2,50),
-        counter_trigger_level = 0.05,)
+        count_time = 0.1, #counter time
+        counter_trigger_voltage = 0.1,
+        device = [device],
+    )
 
-dfmain = pd.DataFrame(data_main)
-dfgraph = pd.DataFrame(data_graph)
+#Create combinations
+parameter_combos = parameter_combinations(parameter_dict)
+data_list = []
 
-#save the data
-filename_main = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy_main'
-dfmain.to_csv(filename_main + '.csv') 
-filename_graph = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ 'min_energy_graph'
-dfgraph.to_csv(filename_graph + '.csv')
+for p_d in tqdm(parameter_combos):
+    data_list.append(pulse_response_2d_awg(**p_d))
 
-#Make/ save the plot
-energy_min_per_ibias_plot(dfgraph)
+#Save the data 
+filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S ktron_min_energy') + testname
+df = pd.DataFrame(data_list)
+df.to_csv(filename + '.csv')
+
+plot_1d_energy_vs_bias(df, threshold = 0.5, ylim = [0.5e-18, 1e-15])
+
+#%%
+
+
+    
+        
