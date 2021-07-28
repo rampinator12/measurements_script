@@ -26,7 +26,7 @@ print(rm.list_resources())
 
 
 #%%============================================================================
-# Define needed functions
+# Utility Functions
 #==============================================================================
 def parameter_combinations(parameters_dict):
     for k,v in parameters_dict.items():
@@ -59,6 +59,9 @@ def find_histogram_median(x_axis, y_histogram):
     return x_axis[idx]
 
 
+#%%============================================================================
+# counter Pulse Measurements
+#==============================================================================
 #reset awgsin/ awgpulse, should do this between runs, could include at end of measurement functions
 def reset_2x_awg_pulse_ktron_experiment(
     pulse_rate = 100,
@@ -217,7 +220,9 @@ def plot_pulse_response_2d(data, max_count = 4):
         filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S-') + testname+ (' %0.1f uA' % (ibias*1e6))
         plt.savefig(filename + '.png', dpi = 300)
         
-
+#================================================================
+#Time Tagger main Function (for t_delay, emin per ibias and 2d pulse map)
+#================================================================
 def experiment_propagation_delay_timetagger(
     tp,
     vbias,
@@ -265,15 +270,16 @@ def experiment_propagation_delay_timetagger(
                                     binwidth=tagger_binwidth_ps, n_bins=tagger_n_bins) 
     
     # Pause briefly to make sure all settings are entered
-    time.sleep(100e-3)
-
-    # Take the data
     correlation.startFor(int(count_time*1e12), clear=True)
-    time.sleep(count_time + 0.05)
+    while correlation.isRunning():
+        time.sleep(1e-3)
+    # time.sleep(count_time + 0.2) # REQUIRE 0.2s extra delay here for initialization
     y_histogram = correlation.getData()
+    
     x_axis = correlation.getIndex()
-    t_median = abs(find_histogram_median(x_axis, y_histogram))
-    t_std = abs(find_mean_std(x_axis, y_histogram))
+    t_median = abs(find_histogram_median(x_axis, y_histogram))*1e-12
+    t_std = abs(find_mean_std(x_axis, y_histogram))*1e-12
+        
     counts = sum(y_histogram)
     
     # Store the data in a dictionary
@@ -289,8 +295,8 @@ def experiment_propagation_delay_timetagger(
         tp = tp,
         count_time = count_time,
         counts = counts,
-        t_median = t_median*1e-12,
-        t_std = t_std*1e-12,
+        t_median = t_median,
+        t_std = t_std,
         pulse_rate = pulse_rate,
         counts_expected = pulse_rate*count_time,
         vp_splitter = vp_splitter,
@@ -323,7 +329,10 @@ def find_v_min(vp_list, counts):    #returns min v_p value where we get a count 
     return v_min 
 
 
-# I-V curves for nanowire/ heater
+#================================================================
+# IV Curves, Single and Steady State
+#================================================================
+
 def v_in_stack(volt_lim, num_pts):
     a = np.linspace(0,volt_lim,num_pts)
     b = np.linspace(volt_lim,-volt_lim,2*num_pts)
@@ -547,19 +556,19 @@ time.sleep(100e-3)
 # Minimum required energy to get a click as fcn of ibias
 #==============================================================================
 
-device = 'A20A26'
+device = 'A25A26'
 #parameter combos lowest variable changes the fastest
 parameter_dict = dict(
-    tp = 2e-9,
-    vbias = np.linspace(0.1,1.5,11),
+    tp =  2e-9, #np.geomspace(4e-10,1e-7,50), #
+    vbias = [1.8,2], #np.linspace(0.1,1.5,40), 
     rbias = 10e3,
-    vp = np.geomspace(0.1,2,21),
-    att_db = 30,
+    vp = np.geomspace(0.1,2,40),
+    att_db = 10,
     count_time = 0.1,
     pulse_rate = pulse_rate,
     vp_splitter = True,
     tagger_ch1_trigger = 0.5,
-    tagger_ch2_trigger = 0.05,
+    tagger_ch2_trigger = 0.01,
     tagger_dead_time = 20000,
     tagger_binwidth_ps = 1,
     tagger_n_bins = 100000,
@@ -579,5 +588,20 @@ for p_d in tqdm(parameter_dict_list):
 filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S ktron min energy and delay') + device
 df = pd.DataFrame(data_list)
 df.to_csv(filename + '.csv')
+#%%
+plot_pulse_response_2d(df, max_count = 4)
+
+#%%
 
 plot_1d_energy_vs_bias(df, threshold = 0.5)
+
+#%%
+#%%Plotting Data for time delay
+df[df['t_median'] > 4e-8] = np.nan
+for name, gd in df.groupby(['ibias']):
+    plt.semilogx(gd.power, gd.t_median*1e9, marker = '.', label = 'Ibias=%0.1f uA' %(name*1e6))
+plt.legend()
+plt.title('Propagation A25A26\n10kΩ bias resistor')
+plt.xlabel('power (W)')
+plt.ylabel('Propagation delay (ns)')
+plt.savefig(filename + '.png', dpi = 300)
