@@ -347,12 +347,14 @@ def iv_sweep(
         channel1 = 1,
         channel2 = 2,
         ):
+    
+    v1 = dmm.read_voltage(channel = channel1) #reading before bias resistor
+    v2 = dmm.read_voltage(channel = channel2) # reading after bias resistor
     # set voltage, wait t_delay, then take measurement
     vs.set_voltage(v_in)
     time.sleep(t_delay)
     
-    v1 = dmm.read_voltage(channel = channel1) #reading before bias resistor
-    v2 = dmm.read_voltage(channel = channel2) # reading after bias resistor
+    
     ibias = (v1-v2)/rbias
     
     data = dict(
@@ -362,6 +364,7 @@ def iv_sweep(
         v_plot = v2
         )
     return data
+
 
 def steadystate_iv_sweep( # note heater is set bias then we sweep other side. We are taking Iv sweep of 'other side' as heater is fixed at same biased current
         t_delay = 0.5,
@@ -420,12 +423,13 @@ vs.set_voltage(0)
 vs.set_output(True)
 time.sleep(0.5)
 
+v_in = v_in_stack(volt_lim = 1.5, num_pts = 25)
 #Make combos (only v in this case) still nice to see progress bar
-testname = 'enter port/ device name here'
+testname = 'A1'
 parameter_dict = dict(
     t_delay = 0.5,   
     rbias = 10e3,
-    v_in = v_in_stack(volt_lim = 5, num_pts = 50),
+    v_in = v_in ,
     channel1 = 1, #Change channels accoardingly 1 means above resistor
     channel2 = 2,
     )
@@ -434,15 +438,17 @@ parameter_combos = parameter_combinations(parameter_dict)
 data_list = []
 
 for p_d in tqdm(parameter_combos):
-    data_list.append(iv_sweep(**pd))
-    
+    data_list.append(iv_sweep(**p_d))
+  
 #save the data
-filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S ktron_2d_pulse ') + testname
+filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%SIVsweep') + testname
 df = pd.DataFrame(data_list)
+
+#
 df.to_csv(filename + '.csv')
 
 #plot the data
-plt.plot(df['v_in'], df['ibias']*1e6, marker = '.')
+plt.plot(df['v_plot'], df['ibias']*1e6, marker = '.')
 plt.title('IV sweep %s' %testname)
 plt.xlabel('Voltage (v)')
 plt.ylabel('ibias (uA)')
@@ -556,11 +562,11 @@ time.sleep(100e-3)
 # Minimum required energy to get a click as fcn of ibias
 #==============================================================================
 
-device = 'A25A26'
+device = 'A17A18'
 #parameter combos lowest variable changes the fastest
 parameter_dict = dict(
     tp =  2e-9, #np.geomspace(4e-10,1e-7,50), #
-    vbias = [1.8,2], #np.linspace(0.1,1.5,40), 
+    vbias = np.linspace(0.1,1.5,40),  #[1.8,2],   , #[0.2, 0.4, 0.6, 0.8, 1],    
     rbias = 10e3,
     vp = np.geomspace(0.1,2,40),
     att_db = 10,
@@ -601,7 +607,7 @@ df[df['t_median'] > 4e-8] = np.nan
 for name, gd in df.groupby(['ibias']):
     plt.semilogx(gd.power, gd.t_median*1e9, marker = '.', label = 'Ibias=%0.1f uA' %(name*1e6))
 plt.legend()
-plt.title('Propagation A25A26\n10kΩ bias resistor')
+plt.title('Propagation delay overbias A25A26\n10kΩ bias resistor')
 plt.xlabel('power (W)')
 plt.ylabel('Propagation delay (ns)')
 plt.savefig(filename + '.png', dpi = 300)
