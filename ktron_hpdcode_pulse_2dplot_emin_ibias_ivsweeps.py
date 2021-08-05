@@ -611,3 +611,44 @@ plt.title('Propagation delay overbias A25A26\n10kΩ bias resistor')
 plt.xlabel('power (W)')
 plt.ylabel('Propagation delay (ns)')
 plt.savefig(filename + '.png', dpi = 300)
+
+
+#%%============================================================================
+# I-V Sweep 1d (no heater biased, testing single pads)
+#==============================================================================
+#zero out voltage 
+vs.set_voltage(0)
+vs.set_output(True)
+time.sleep(0.5)
+
+v_in = v_in_stack(volt_lim = 1.5, num_pts = 25)
+#Make combos (only v in this case) still nice to see progress bar
+testname = 'A1'
+parameter_dict = dict(
+    t_delay = 0.5,   
+    rbias = 10e3,
+    v_in = v_in ,
+    channel1 = 1, #Change channels accoardingly 1 means above resistor
+    channel2 = 2,
+    )
+#create combos
+parameter_combos = parameter_combinations(parameter_dict)
+data_list = []
+
+for p_d in tqdm(parameter_combos):
+    data_list.append(iv_sweep(**p_d))
+  
+#save the data
+filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%SIVsweep') + testname
+df = pd.DataFrame(data_list)
+
+#
+df.to_csv(filename + '.csv')
+
+#plot the data
+plt.plot(df['v_plot'], df['ibias']*1e6, marker = '.')
+plt.title('IV sweep %s' %testname)
+plt.xlabel('Voltage (v)')
+plt.ylabel('ibias (uA)')
+plt.savefig(filename + '.png')
+
