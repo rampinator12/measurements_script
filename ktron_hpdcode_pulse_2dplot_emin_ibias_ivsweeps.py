@@ -440,6 +440,18 @@ data_list = []
 for p_d in tqdm(parameter_combos):
     data_list.append(iv_sweep(**p_d))
   
+#find switching current and series resistance, note v_lim is window where it is found
+v_lim = 0.005
+
+df_lim = df[(df['v_plot'] < v_lim) & (df['v_plot'] > -v_lim)]
+ibias = df_lim.loc[:,'ibias']
+voltage = df_lim.loc[:,'v_plot']
+ib = ibias.to_numpy()
+i_switch = ((max(ib)-min(ib))/2)*1e6#currently in uA
+m, b  = np.polyfit(voltage, ibias, 1)
+r_series = 1/m
+print("Iswitch: %0.1f uA" %i_switch)
+print("Rseries: %0.1f ohm" %r_series)
 #save the data
 filename = datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%SIVsweep') + testname
 df = pd.DataFrame(data_list)
